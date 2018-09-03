@@ -1,14 +1,17 @@
+//Falta implementar logica del estado alocate, y el write
+
 module TLB_L1 #(parameter TamAddr=16, parameter tag=3, parameter index=6, parameter ubi=3)
             (input logic [TamAddr-1:0] address,pc,
              input logic search_i,search_d,clk,rst,
              input logic [63:0] data_write,
+             input logic [31:0] inst_write,
              input logic wr_mem,dataComplete,writeComplete,
              output logic [7:0] data,
              output logic hitData,
              output logic hitInst,
              output logic [7:0] instr);
 
-typedef enum logic[1:0] {idle,Validar,Alocate,miss_write} state_t;
+typedef enum logic[1:0] {idle,buscar,Alocate,write} state_t;
 state_t reg_state,next_state;
 
 //Señales adicionales
@@ -16,14 +19,14 @@ logic [67:0] TLB_0_data [0:63];// V,Tag,Data
 logic [67:0] TLB_1_data [0:63];// V,Tag,Data
 logic [67:0] TLB_0_inst [0:63];// V,Tag,Data
 logic [67:0] TLB_1_inst [0:63];// V,Tag,Data
-logic LRU_data [0:63];
-logic LRU_inst [0:63];    
-logic [67:0] indexTag_data_0,indexTag_data_1;
-logic [67:0] indexTag_inst_0,indexTag_inst_1;
-logic [7:0] dataOut,instruc;
-logic hitData_0,hitData_1,hitInstruc_0,hitInstruc_1;
+logic LRU_data [0:63];//Ultimo dato usado
+logic LRU_inst [0:63];//Ultimo dato usado   
+logic [67:0] indexTag_data_0,indexTag_data_1;//aux para data 0
+logic [67:0] indexTag_inst_0,indexTag_inst_1;//aux para data 1
+logic [7:0] dataOut,instruc;//data de salida
+logic hitData_0,hitData_1,hitInstruc_0,hitInstruc_1;//aux de hit de dato 0,1 y instruc 0,1
 
-initial
+initial//Iniciacion en cero del sistema de memorias
 begin
     logic [6:0] i;
     for(i=0; i<64;i++)
@@ -62,34 +65,40 @@ always_comb
     case(reg_state)
     idle:
         begin
-                next_state = (search_i || search_d) ? Validar : idle; 
+                next_state = (search_i || search_d) ? buscar : idle;// si quiero buscar una instruccion o dato paso a buscar 
         end
-    Validar:
+    buscar:
         begin
-                if(search_i)
-                    if(hitInst)
-                        next_state = idle;
-                    else if(~hitInst & wr_mem)
-                        next_state = miss_write;     
-                else if (search_d)
-                    if(hitInst)                 
-                        next_state = idle;      
-                    else if(~hitInst & wr_mem)  
-                        next_state = miss_write;                            
+                if(hitData && wr_mem)  
+                    next_state = write; // si no encuentro el dato paso a escribir
+                else if(hitInst && wr_mem)
+                    next_state = write;//si no la encuentro y era escritura paso a escribir 
+                else if(hitInst || hitData)
+                    next_state = idle;//si encuentro la instruccion paso a esperar o si encuentro el dato paso a esperar 
+                else if(~hitInst && wr_mem)
+                    next_state = write;//si no la encuentro y era escritura paso a escribir   
+                else if(~hitInst)
+                    next_state = Alocate;//no tuve hit y no era una escritura
+                else if(~hitData && wr_mem)  
+                    next_state = write; // si no encuentro el dato paso a escribir
+                else if(~hitData)
+                    next_state = Alocate;//no tuve hit y no era una escritura
+                else
+                    next_state = idle;                     
         end                   
     Alocate:          
         begin
                 if(dataComplete)
-                    next_state = Validar;
+                    next_state = buscar;//Si termine de cargar los datos paso a buscarlos
                 else
-                    next_state = Alocate;           
+                    next_state = Alocate;//Si no termine sigo esperando           
         end
-    miss_write:
+    write:
         begin
                 if(writeComplete)
-                    next_state = Validar;
+                    next_state = idle;//si termine de escribir paso a esperar
                 else
-                    next_state = miss_write;             
+                    next_state = write;//si todavia no termine de escribir espero             
         end
     default:
         begin
@@ -101,51 +110,31 @@ always_comb
 //Logica de señales de salida    
 always_comb
         case(reg_state)
-        idle:
+        idle://si estoy esperando todas las señales en cero
             begin
                     data = 0;
                     hitData = 0;
                     hitInst = 0;
                     instr = 0;
             end
-        Validar:
+        buscar:
             begin
-                    if(search_i)
+                    if(search_d && wr_mem)//Si estoy buscando un dato para escribir
                     begin
-                         if(hitInstruc_0)
-                            case(pc[2:0])
-                                                3'b000:       instruc=indexTag_inst_0[7:0];  
-                                                3'b001:       instruc=indexTag_inst_0[15:8]; 
-                                                3'b010:       instruc=indexTag_inst_0[23:16]; 
-                                                3'b011:       instruc=indexTag_inst_0[31:24];
-                                                3'b100:       instruc=indexTag_inst_0[39:32];
-                                                3'b101:       instruc=indexTag_inst_0[47:40];  
-                                                3'b110:       instruc=indexTag_inst_0[55:48];  
-                                                3'b111:       instruc=indexTag_inst_0[63:56];
-                                                default:      instruc=0;
-                               endcase
-                         else if(hitInstruc_1)
-                               case(pc[2:0])
-                                                   3'b000:       instruc=indexTag_inst_0[7:0];  
-                                                   3'b001:       instruc=indexTag_inst_0[15:8]; 
-                                                   3'b010:       instruc=indexTag_inst_0[23:16]; 
-                                                   3'b011:       instruc=indexTag_inst_0[31:24];
-                                                   3'b100:       instruc=indexTag_inst_0[39:32];
-                                                   3'b101:       instruc=indexTag_inst_0[47:40];  
-                                                   3'b110:       instruc=indexTag_inst_0[55:48];  
-                                                   3'b111:       instruc=indexTag_inst_0[63:56];
-                                                   default:      instruc=0;
-                                  endcase
-                         else
-                         begin
-                                instruc = 0;
-                                hitInst = 0;
-                         end
-                        hitInst = hitInstruc_0 || hitInstruc_1;
-                    end        
-                    else if (search_d)
+                        if(hitData_0)//si lo encontre lo escribo
+                        begin
+                            TLB_0_data[address[8:3]] = data_write;
+                        end
+                        else if(hitData_1)//si lo encontre lo escribo
+                        begin
+                            TLB_1_data[address[8:3]] = data_write;
+                        end
+                        hitData = hitData_0 || hitData_1; //aviso del hit
+                    end
+                    else if (search_d)//estoy buscando un dato
                     begin
-                        if(hitData_0)
+                        if(hitData_0)// si lo encontre en el TLB_0
+                        begin
                             case(address[2:0])
                                     3'b000:       dataOut=indexTag_data_0[7:0];  
                                     3'b001:       dataOut=indexTag_data_0[15:8]; 
@@ -157,7 +146,10 @@ always_comb
                                     3'b111:       dataOut=indexTag_data_0[63:56];
                                     default:      dataOut=0;
                             endcase
-                        else if(hitData_1)
+                            hitData = hitData_0 || hitData_1;//aviso de hit
+                        end
+                        else if(hitData_1)// si lo encontre en el TLB_1
+                        begin
                             case(address[2:0])
                                                3'b000:       dataOut=indexTag_data_0[7:0];  
                                                3'b001:       dataOut=indexTag_data_0[15:8]; 
@@ -168,28 +160,79 @@ always_comb
                                                3'b110:       dataOut=indexTag_data_0[55:48];  
                                                3'b111:       dataOut=indexTag_data_0[63:56];
                                                default:      dataOut=0;
-                            endcase 
+                            endcase
+                            hitData = hitData_0 || hitData_1;//aviso de hit
+                        end 
                         else
                             begin
                                 dataOut = 0;
-                                hitData = 0;
+                                hitData = 0;//aviso de no encontre nada
                             end
-                        hitData = hitData_0 || hitData_1;
+                    if(search_i && wr_mem)//Si estoy buscando una instruc para escribir
+                    begin
+                        if(hitInstruc_0)//Si la encontre escribo
+                        begin
+                            TLB_0_inst[address[8:3]] = inst_write;
+                        end
+                        else if(hitInstruc_1)//Si la encontre escribo
+                        begin
+                            TLB_1_inst[address[8:3]] = inst_write;
+                        end
+                        hitInst = hitInstruc_0 || hitInstruc_1; //aviso del hit
+                    end
+                    else if(search_i)//Si estoy buscando una instruc para leer
+                    begin
+                         if(hitInstruc_0)//Si la encontre saco la instruc
+                         begin
+                            case(pc[2:0])
+                                3'b000:       instruc=indexTag_inst_0[7:0];  
+                                3'b001:       instruc=indexTag_inst_0[15:8]; 
+                                3'b010:       instruc=indexTag_inst_0[23:16]; 
+                                3'b011:       instruc=indexTag_inst_0[31:24];
+                                3'b100:       instruc=indexTag_inst_0[39:32];
+                                3'b101:       instruc=indexTag_inst_0[47:40];  
+                                3'b110:       instruc=indexTag_inst_0[55:48];  
+                                3'b111:       instruc=indexTag_inst_0[63:56];
+                                default:      instruc=0;
+                            endcase
+                            hitInst = hitInstruc_0 || hitInstruc_1;//Aviso de hit
+                         end
+                         else if(hitInstruc_1)//Si la encontre saco la instruc
+                            begin
+                               case(pc[2:0])
+                                                   3'b000:       instruc=indexTag_inst_0[7:0];  
+                                                   3'b001:       instruc=indexTag_inst_0[15:8]; 
+                                                   3'b010:       instruc=indexTag_inst_0[23:16]; 
+                                                   3'b011:       instruc=indexTag_inst_0[31:24];
+                                                   3'b100:       instruc=indexTag_inst_0[39:32];
+                                                   3'b101:       instruc=indexTag_inst_0[47:40];  
+                                                   3'b110:       instruc=indexTag_inst_0[55:48];  
+                                                   3'b111:       instruc=indexTag_inst_0[63:56];
+                                                   default:      instruc=0;
+                                endcase
+                                hitInst = hitInstruc_0 || hitInstruc_1;//Aviso de hit
+                            end
+                         else//no hubo hit, aviso 
+                         begin
+                                instruc = 0;
+                                hitInst = 0;
+                         end
+                    end        
                   end                            
             end                   
         Alocate:          
             begin
                     if(dataComplete)
-                        next_state = Validar;
+                        next_state = buscar;
                     else
                         next_state = Alocate;           
             end
-        miss_write:
+        write:
             begin
                     if(writeComplete)
-                        next_state = Validar;
+                        next_state = buscar;
                     else
-                        next_state = miss_write;             
+                        next_state = write;             
             end
         default:
             begin
